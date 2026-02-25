@@ -225,6 +225,69 @@ async function generateDiscordSubtitle(channel, episodeId, lang = "English") {
     return null;
   }
 }
+// -------------------- USER USAGE LOG --------------------
+async function logUserUsage({
+  userId = "0000",
+  username = "Unknown",
+  message = "",
+  reply = "",
+  country = "Unknown"
+}) {
+  try {
+    await axios.post(
+      "https://creators.kiroflix.site/backend/log_usage.php",
+      {
+        user_id: userId,
+        username,
+        message,
+        reply,
+        country,
+        date: new Date().toISOString()
+      }
+    );
+  } catch (err) {
+    console.error("❌ Failed to log usage:", err.message);
+  }
+}
+
+// -------------------- CALL LOG IN MESSAGE HANDLER --------------------
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return; // ignore bots
+
+  // Extract info safely
+  const userId = message.author?.id || "0000";
+  const username = message.author?.tag || "Unknown";
+  const country = message.guild?.preferredLocale || "Unknown"; // Discord server locale or fallback
+
+  // Example reply text you might send
+  let replyText = "";
+
+  try {
+    // Check if DM or server
+    if (message.channel.type === 1) {
+      replyText = "Thanks for DMing me! 🍿";
+      await message.channel.send(replyText);
+    } else {
+      // If in a specific search channel only
+      const SEARCH_CHANNEL_ID = "1476169370693664878";
+      if (message.channel.id === SEARCH_CHANNEL_ID) {
+        replyText = "🍿 Processing your anime request...";
+        await message.reply(replyText);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Error sending reply:", err.message);
+  }
+
+  // Log usage
+  await logUserUsage({
+    userId,
+    username,
+    message: message.content,
+    reply: replyText,
+    country
+  });
+});
 // -------------------- MESSAGE HANDLER --------------------
 // Replace with your channel ID
 const SEARCH_CHANNEL_ID = "1476169370693664878";
@@ -232,47 +295,119 @@ const SEARCH_CHANNEL_ID = "1476169370693664878";
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return; // ignore bots
 
-  const isDM = message.channel.type === 1; // 1 = DM in discord.js v14
+  const isDM = message.channel.type === 1; // 1 = DM
   const isSearchChannel = message.channel.id === SEARCH_CHANNEL_ID;
 
   // Only handle messages from search channel or DMs
   if (!isSearchChannel && !isDM) return;
 
-  const channel = message.channel; // reply here
+  // Determine where to reply
+  let replyChannel = message.channel;
+
+  // If message is in search channel, reply in DM instead
+  if (!isDM && isSearchChannel) {
+    try {
+      replyChannel = await message.author.createDM();
+    } catch {
+      console.warn(`❌ Could not DM user ${message.author.tag}`);
+      replyChannel = message.channel; // fallback to channel
+    }
+  }
+
   const text = message.content;
   if (!text) return;
 
+  let finalReplyText = ""; // for logging
+
   try {
-    // Commands
+    // -------------------- COMMANDS --------------------
     if (text.startsWith("/start") || text.startsWith("/help")) {
-      return channel.send(`🎬 Welcome to Kiroflix Discord Bot!\nSend anime title + episode number to get stream.\nOptional: add "subtitle in <language>"`);
-    }
-    if (text.startsWith("/latest")) {
-      if (!fs.existsSync(CACHE_FILE)) return channel.send("⏳ Latest episodes are being prepared...");
-      const cache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-      return channel.send({ content: cache.message, allowedMentions: { parse: [] } });
+      finalReplyText = `🎬 Welcome message sent`;
+      await replyChannel.send(
+        `🎬 Welcome to Kiroflix Discord Bot!\nSend anime title + episode number to get stream.\nOptional: add "subtitle in <language>"`
+      );
+      return logUserUsage({
+        userId: message.author?.id || "0000",
+        username: message.author?.tag || "Unknown",
+        message: text,
+        reply: finalReplyText
+      });
     }
 
-    await channel.send("🍿 Finding your episode...");
+    if (text.startsWith("/latest")) {
+      if (!fs.existsSync(CACHE_FILE)) {
+        finalReplyText = "Latest episodes preparing...";
+        await replyChannel.send("⏳ Latest episodes are being prepared...");
+      } else {
+        const cache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+        finalReplyText = "Sent latest episodes";
+        await replyChannel.send({ content: cache.message, allowedMentions: { parse: [] } });
+      }
+      return logUserUsage({
+        userId: message.author?.id || "0000",
+        username: message.author?.tag || "Unknown",
+        message: text,
+        reply: finalReplyText
+      });
+    }
+
+    // -------------------- EPISODE REQUEST --------------------
+    await replyChannel.send("🍿 Finding your episode...");
+    finalReplyText = "Finding episode...";
 
     // AI Intent
     const intent = await parseIntent(text);
-    if (!intent) return channel.send("❌ Could not understand request");
+    if (!intent) {
+      finalReplyText = "Could not understand request";
+      await replyChannel.send("❌ Could not understand request");
+      return logUserUsage({
+        userId: message.author?.id || "0000",
+        username: message.author?.tag || "Unknown",
+        message: text,
+        reply: finalReplyText
+      });
+    }
 
-    // Search + match
+    // Search + best match
     const results = await searchAnime(intent.title);
-    if (!results.length) return channel.send("❌ Anime not found");
+    if (!results.length) {
+      finalReplyText = "Anime not found";
+      await replyChannel.send("❌ Anime not found");
+      return logUserUsage({
+        userId: message.author?.id || "0000",
+        username: message.author?.tag || "Unknown",
+        message: text,
+        reply: finalReplyText
+      });
+    }
+
     const anime = await chooseBestAnime(intent, results);
-
-    // Episodes
     const episodes = await getEpisodes(anime.id);
-    if (!episodes.length) return channel.send("❌ Episodes unavailable");
+    if (!episodes.length) {
+      finalReplyText = "Episodes unavailable";
+      await replyChannel.send("❌ Episodes unavailable");
+      return logUserUsage({
+        userId: message.author?.id || "0000",
+        username: message.author?.tag || "Unknown",
+        message: text,
+        reply: finalReplyText
+      });
+    }
+
     const episode = episodes.find(e => Number(e.number) === Number(intent.episode)) || episodes[0];
-
     const stream = await generateStream(episode.id);
-    if (!stream) return channel.send("❌ Could not generate stream");
+    if (!stream) {
+      finalReplyText = "Could not generate stream";
+      await replyChannel.send("❌ Could not generate stream");
+      return logUserUsage({
+        userId: message.author?.id || "0000",
+        username: message.author?.tag || "Unknown",
+        message: text,
+        reply: finalReplyText
+      });
+    }
 
-    // Reply with embed
+    // -------------------- REPLY EMBED --------------------
     const embed = new EmbedBuilder()
       .setTitle(`${anime.title} - Episode ${episode.number}`)
       .setDescription(`[Watch Now](${stream.player})`)
@@ -280,26 +415,42 @@ client.on('messageCreate', async (message) => {
       .setColor(0xff0000)
       .setThumbnail(anime.poster || null);
 
-    await channel.send({ embeds: [embed] });
+    await replyChannel.send({ embeds: [embed] });
+    finalReplyText = `${anime.title} - Episode ${episode.number} - ${stream.player}`;
 
-    // Subtitle
+    // -------------------- SUBTITLE --------------------
     if (intent.subtitle) {
       const lang = intent.subtitleLang || "English";
       const subs = await fetchAvailableSubtitles(episode.id);
       const existing = subs.find(s => s.lang.toLowerCase() === lang.toLowerCase());
       if (existing) {
-        await channel.send(`🎯 Subtitle already available: ${existing.lang} .`);
+        await replyChannel.send(`🎯 Subtitle already available: ${existing.lang}.`);
       } else {
-        await generateDiscordSubtitle(channel, episode.id, lang);
+        await generateDiscordSubtitle(replyChannel, episode.id, lang);
       }
     }
 
+    // -------------------- LOG USAGE --------------------
+    await logUserUsage({
+      userId: message.author?.id || "0000",
+      username: message.author?.tag || "Unknown",
+      message: text,
+      reply: finalReplyText
+    });
+
   } catch (err) {
     logError("MAIN HANDLER", err);
-    channel.send("⚠️ Something went wrong.");
+    await replyChannel.send("⚠️ Something went wrong.");
+    await logUserUsage({
+      userId: message.author?.id || "0000",
+      username: message.author?.tag || "Unknown",
+      message: text,
+      reply: "⚠️ Something went wrong."
+    });
   }
 });
 // -------------------- LOGIN --------------------
 
 client.login(TOKEN);
+
 

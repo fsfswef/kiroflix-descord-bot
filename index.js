@@ -4,6 +4,14 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.j
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const express = require("express");
+
+// -------------------- SERVER --------------------
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (_, res) => res.send("Kiroflix bot alive 🌟"));
+app.listen(PORT, () => console.log("[SERVER] Running on", PORT));
 
 // -------------------- CONFIG --------------------
 const TOKEN = process.env.BOT_TOKEN;
@@ -285,4 +293,5 @@ client.on('messageCreate', async (message) => {
   }
 });
 // -------------------- LOGIN --------------------
+
 client.login(TOKEN);

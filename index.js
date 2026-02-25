@@ -66,7 +66,20 @@ async function parseIntent(text) {
   try {
     const prompt = `
 You are an anime title parser.
-Return JSON as:
+
+GOAL:
+1️⃣ Detect the anime title from ANY language
+2️⃣ Convert to MOST COMMON official title
+3️⃣ Extract season/part if present
+4️⃣ Extract episode number
+5️⃣ Detect subtitle request + language
+
+IMPORTANT:
+- If unsure → {"notFound": true}
+- NEVER guess
+- Return ONLY JSON
+
+FORMAT:
 {
   "title":"official anime title",
   "season":null,
@@ -75,24 +88,42 @@ Return JSON as:
   "subtitleLang":null,
   "notFound":false
 }
-User: ${text}`;
+
+User: ${text}
+`;
+
     let res = await askAI(prompt);
     res = res.replace(/```json|```/gi, "").trim();
     const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON from AI");
+    if (!json) throw new Error("No JSON");
+
     return JSON.parse(json);
+
   } catch {
-    // fallback simple parser
+    // fallback regex
     const ep = text.match(/ep(?:isode)?\s*(\d+)/i)?.[1];
     const season = text.match(/season\s*(\d+)/i)?.[1] || null;
-    const title = text.replace(/ep(?:isode)?\s*\d+/i, "").replace(/season\s*\d+/i, "").trim();
     const subtitleMatch = text.match(/subtitle(?: in)?\s*([a-zA-Z]+)/i);
-    const subtitleLang = subtitleMatch ? subtitleMatch[1] : null;
-    if (title && ep) return { title, season, episode: Number(ep), subtitle: !!subtitleLang, subtitleLang };
+
+    const title = text
+      .replace(/ep(?:isode)?\s*\d+/i, "")
+      .replace(/season\s*\d+/i, "")
+      .replace(/subtitle/i, "")
+      .trim();
+
+    if (title && ep) {
+      return {
+        title,
+        season,
+        episode: Number(ep),
+        subtitle: !!subtitleMatch,
+        subtitleLang: subtitleMatch?.[1] || null,
+        notFound: false
+      };
+    }
     return null;
   }
 }
-
 // -------------------- SEARCH --------------------
 async function searchAnime(title) {
   try {
@@ -107,16 +138,30 @@ async function searchAnime(title) {
 // -------------------- BEST MATCH --------------------
 async function chooseBestAnime(intent, results) {
   try {
-    const minimal = results.map(a => ({ id: a.id, title: a.title }));
+    const minimal = results.map(a => ({
+      id: a.id,
+      title: a.title
+    }));
+
     const prompt = `
-User searching: "${intent.title}"
-Return ONLY the id of the best match from this list:
+User search: "${intent.title}" ${intent.season ? `season ${intent.season}` : ""}
+
+Pick the BEST matching anime from this list.
+If a season is specified, prefer titles containing that season.
+
+Return ONLY the id.
+
 ${JSON.stringify(minimal)}
 `;
+
     const res = await askAI(prompt);
     const id = res.match(/\d+/)?.[0];
-    return results.find(a => a.id === id) || results[0];
-  } catch { return results[0]; }
+
+    return results.find(a => String(a.id) === String(id)) || results[0];
+
+  } catch {
+    return results[0];
+  }
 }
 
 // -------------------- EPISODES --------------------
@@ -452,5 +497,6 @@ client.on('messageCreate', async (message) => {
 // -------------------- LOGIN --------------------
 
 client.login(TOKEN);
+
 
 

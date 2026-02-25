@@ -230,42 +230,49 @@ async function generateDiscordSubtitle(channel, episodeId, lang = "English") {
 const SEARCH_CHANNEL_ID = "1476169370693664878";
 
 client.on('messageCreate', async (message) => {
-  if (message.author.bot) return; // ignore other bots
-  if (message.channel.id !== SEARCH_CHANNEL_ID) return; // ignore all other channels
+  if (message.author.bot) return; // ignore bots
 
+  const isDM = message.channel.type === 1; // 1 = DM in discord.js v14
+  const isSearchChannel = message.channel.id === SEARCH_CHANNEL_ID;
+
+  // Only handle messages from search channel or DMs
+  if (!isSearchChannel && !isDM) return;
+
+  const channel = message.channel; // reply here
   const text = message.content;
+  if (!text) return;
 
   try {
     // Commands
     if (text.startsWith("/start") || text.startsWith("/help")) {
-      return message.reply(`🎬 Welcome to Kiroflix Discord Bot!\nSend anime title + episode number to get stream.\nOptional: add "subtitle in <language>"`);
+      return channel.send(`🎬 Welcome to Kiroflix Discord Bot!\nSend anime title + episode number to get stream.\nOptional: add "subtitle in <language>"`);
     }
     if (text.startsWith("/latest")) {
-      if (!fs.existsSync(CACHE_FILE)) return message.reply("⏳ Latest episodes are being prepared...");
+      if (!fs.existsSync(CACHE_FILE)) return channel.send("⏳ Latest episodes are being prepared...");
       const cache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-      return message.reply({ content: cache.message, allowedMentions: { parse: [] } });
+      return channel.send({ content: cache.message, allowedMentions: { parse: [] } });
     }
 
-    await message.reply("🍿 Finding your episode...");
+    await channel.send("🍿 Finding your episode...");
 
     // AI Intent
     const intent = await parseIntent(text);
-    if (!intent) return message.reply("❌ Could not understand request");
+    if (!intent) return channel.send("❌ Could not understand request");
 
     // Search + match
     const results = await searchAnime(intent.title);
-    if (!results.length) return message.reply("❌ Anime not found");
+    if (!results.length) return channel.send("❌ Anime not found");
     const anime = await chooseBestAnime(intent, results);
 
     // Episodes
     const episodes = await getEpisodes(anime.id);
-    if (!episodes.length) return message.reply("❌ Episodes unavailable");
+    if (!episodes.length) return channel.send("❌ Episodes unavailable");
     const episode = episodes.find(e => Number(e.number) === Number(intent.episode)) || episodes[0];
 
     const stream = await generateStream(episode.id);
-    if (!stream) return message.reply("❌ Could not generate stream");
+    if (!stream) return channel.send("❌ Could not generate stream");
 
-    // Reply
+    // Reply with embed
     const embed = new EmbedBuilder()
       .setTitle(`${anime.title} - Episode ${episode.number}`)
       .setDescription(`[Watch Now](${stream.player})`)
@@ -273,25 +280,26 @@ client.on('messageCreate', async (message) => {
       .setColor(0xff0000)
       .setThumbnail(anime.poster || null);
 
-    await message.reply({ embeds: [embed] });
+    await channel.send({ embeds: [embed] });
+
+    // Subtitle
     if (intent.subtitle) {
-  const lang = intent.subtitleLang || "English";
-
-  const subs = await fetchAvailableSubtitles(episode.id);
-  const existing = subs.find(s => s.lang.toLowerCase() === lang.toLowerCase());
-
-  if (existing) {
-    await message.channel.send(`🎯 Subtitle already available: ${existing.lang} .`);
-  } else {
-    await generateDiscordSubtitle(message.channel, episode.id, lang);
-  }
-}
+      const lang = intent.subtitleLang || "English";
+      const subs = await fetchAvailableSubtitles(episode.id);
+      const existing = subs.find(s => s.lang.toLowerCase() === lang.toLowerCase());
+      if (existing) {
+        await channel.send(`🎯 Subtitle already available: ${existing.lang} .`);
+      } else {
+        await generateDiscordSubtitle(channel, episode.id, lang);
+      }
+    }
 
   } catch (err) {
     logError("MAIN HANDLER", err);
-    message.reply("⚠️ Something went wrong.");
+    channel.send("⚠️ Something went wrong.");
   }
 });
 // -------------------- LOGIN --------------------
 
 client.login(TOKEN);
+
